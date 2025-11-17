@@ -1,0 +1,5 @@
+pdfplumber
+pdf2image
+pytesseract
+pillow
+# optional: pymupdf  # PyMuPDF may require native build toolchain on Windows
