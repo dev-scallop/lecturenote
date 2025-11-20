@@ -3,446 +3,240 @@
 import fitz  # PyMuPDF
 import os
 import json
+import re
 
 
 # ---------------------------------------------------------
-# (A) PDF 목차(TOC) 기반 챕터 분석 – 공통 엔진
+# 캡션 패턴 인식 ("그림 3-1 ...", "표 4-2 ..." 등)
 # ---------------------------------------------------------
-def find_chapter_starts(doc):
-    """
-    PDF TOC(목차) 기반으로 챕터 리스트를 만든다.
-    TOC 구조: [level, title, page_number]
-    level == 1 : 최상위 챕터
-    """
+CAPTION_PATTERN = re.compile(
+    r'^(그림|표)\s*\d+[\-\.]\d+(\s+.+)?$'
+)
+
+def _is_caption_text(text: str) -> bool:
+    """텍스트가 '그림 1-1 …' 또는 '표 2-3 …' 패턴인지 판별"""
+    if not text:
+        return False
+    t = text.strip()
+    if CAPTION_PATTERN.match(t):
+        return True
+    # 영어 버전도 허용
+    tl = t.lower()
+    if tl.startswith("figure ") or tl.startswith("fig ") or tl.startswith("fig.") or tl.startswith("table "):
+        return True
+    return False
+
+
+# ---------------------------------------------------------
+# PDF TOC 가져오기 (GUI에서 사용할 목록)
+# ---------------------------------------------------------
+def get_toc_items(doc):
     toc = doc.get_toc()
     if not toc:
-        raise RuntimeError("PDF에 TOC(목차)가 없습니다.")
+        raise RuntimeError("PDF에 목차(TOC)가 없습니다.")
 
-    lvl1 = [t for t in toc if t[0] == 1]
-    chapters = []
+    items = []
+    n = len(toc)
+    page_count = doc.page_count
 
-    for i, (level, title, page_num) in enumerate(lvl1):
-        start = page_num - 1  # PyMuPDF page index (0-based)
-
-        if i == len(lvl1) - 1:
-            end = doc.page_count
+    for i, (level, title, page) in enumerate(toc):
+        start = max(page - 1, 0)
+        if i == n - 1:
+            end = page_count - 1
         else:
-            next_start = lvl1[i + 1][2] - 1
-            end = next_start
+            end = max(toc[i + 1][2] - 2, start)
 
-        chapters.append({
+        items.append({
             "index": i + 1,
-            "title": title,
+            "level": level,
+            "title": title or "",
             "start": start,
-            "end": end
+            "end": end,
         })
-
-    return chapters
+    return items
 
 
 # ---------------------------------------------------------
-# (B) 기본 페이지 추출 엔진 (default)
+# 텍스트 블록 추출
 # ---------------------------------------------------------
-def _extract_page_blocks_default(page, chapter_idx, page_abs_index, out_dir,
-                                 max_local_blocks=3):
-    """
-    기본 엔진:
-      - 텍스트 블록
-      - 이미지 블록 (PNG 저장)
-      - 이미지 아래 텍스트 1~3개 local_text 로 묶기
-    """
-    page_dict = page.get_text("dict")
-    blocks = page_dict["blocks"]
-
+def _extract_text_blocks(page):
+    blocks = page.get_text("dict")["blocks"]
     text_blocks = []
-    image_blocks = []
-
-    img_counter = 0
     page_texts = []
 
     for idx, b in enumerate(blocks):
-        btype = b.get("type", 0)
-        bbox = b.get("bbox", [0, 0, 0, 0])
+        if b.get("type", 0) != 0:
+            continue
 
-        # 텍스트
-        if btype == 0:
-            text = ""
-            for line in b.get("lines", []):
-                for span in line.get("spans", []):
-                    text += span.get("text", "")
-                text += "\n"
-            text = text.strip()
-            if text:
-                text_blocks.append({
-                    "index": idx,
-                    "text": text,
-                    "bbox": bbox
-                })
-                page_texts.append(text)
+        txt = ""
+        for line in b.get("lines", []):
+            for span in line.get("spans", []):
+                txt += span.get("text", "")
+            txt += "\n"
 
-        # 이미지
-        elif btype == 1:
-            img_counter += 1
-            image_blocks.append({
+        txt = txt.strip()
+        if txt:
+            text_blocks.append({
                 "index": idx,
-                "bbox": bbox,
-                "img_idx": img_counter
+                "text": txt,
+                "bbox": b.get("bbox"),
             })
+            page_texts.append(txt)
 
-    image_items = []
-    for ib in image_blocks:
-        bbox = ib["bbox"]
-        rect = fitz.Rect(bbox)
-        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=rect)
+    return text_blocks, page_texts
 
-        img_name = f"chapter{chapter_idx:02d}_p{page_abs_index+1:04d}_img{ib['img_idx']:02d}.png"
-        out_path = os.path.join(out_dir, img_name)
-        pix.save(out_path)
 
-        # 이미지 아래 텍스트 1~3개 추출
-        local_texts = []
-        for tb in text_blocks:
-            if tb["index"] <= ib["index"]:
+# ---------------------------------------------------------
+# 도식/표 벡터 rect 후보 얻기
+# ---------------------------------------------------------
+def _get_diagram_rects(page, min_size=50):
+    """
+    page.get_drawings() 에서 path 단위로 추출한 rect 들 중
+    도식 가능성이 있는 것만 필터링.
+    """
+    rects = []
+    for d in page.get_drawings():
+        r = d.get("rect")
+        if not r:
+            continue
+        x0, y0, x1, y1 = r
+        w, h = x1 - x0, y1 - y0
+
+        # 너무 작은 장식 요소 제거
+        if w < min_size or h < min_size:
+            continue
+
+        rects.append(fitz.Rect(x0, y0, x1, y1))
+
+    return rects
+
+
+# ---------------------------------------------------------
+# 캡션 아래쪽/위쪽 rect 중 관련 있는 것만 모아 union
+# ---------------------------------------------------------
+def _union_diagram_for_caption(caption_bbox, diagram_rects, max_distance=700):
+    cx0, cy0, cx1, cy1 = caption_bbox
+
+    candidates = []
+    for r in diagram_rects:
+        # 도식은 보통 caption 위에 위치
+        if r.y1 > cy0 + 5:  
+            continue
+
+        # caption과 너무 떨어진 도형은 제외
+        if (cy0 - r.y1) > max_distance:
+            continue
+
+        # 가로 겹침 필터 (너무 좌우로 떨어진 도형은 제외)
+        if r.x1 < cx0 - 80 or r.x0 > cx1 + 80:
+            continue
+
+        candidates.append(r)
+
+    if not candidates:
+        return None
+
+    # 여러 rect 를 하나의 큰 bbox 로 merge
+    x0 = min(r.x0 for r in candidates)
+    y0 = min(r.y0 for r in candidates)
+    x1 = max(r.x1 for r in candidates)
+    y1 = max(r.y1 for r in candidates)
+
+    return fitz.Rect(x0, y0, x1, y1)
+
+
+# ---------------------------------------------------------
+# 페이지 내 이미지/도식/표 추출 핵심
+# ---------------------------------------------------------
+def _process_images(page, chapter_idx, page_abs_index, out_dir, text_blocks):
+    images = []
+    diagram_rects = _get_diagram_rects(page)
+
+    diagram_counter = 0
+
+    # 캡션 기준으로 도식/표 추출
+    for tb in text_blocks:
+        text = tb["text"]
+        if not _is_caption_text(text):
+            continue
+
+        caption = text.strip()
+        cap_bbox = tb["bbox"]
+
+        # 1) 캡션과 가장 관련 있는 도식 rect들을 union
+        diag_rect = _union_diagram_for_caption(cap_bbox, diagram_rects)
+        if diag_rect is None:
+            continue
+
+        # 2) 렌더링
+        pix = page.get_pixmap(
+            matrix=fitz.Matrix(3, 3),
+            clip=diag_rect
+        )
+
+        diagram_counter += 1
+        fname = f"chapter{chapter_idx:02d}_p{page_abs_index+1:04d}_diagram{diagram_counter:02d}.png"
+        save_path = os.path.join(out_dir, fname)
+        pix.save(save_path)
+
+        # 3) caption 뒤 몇 개 텍스트를 local_text 로
+        local_list = []
+        for tb2 in text_blocks:
+            if tb2["index"] <= tb["index"]:
                 continue
-            if tb["bbox"][1] >= bbox[3] - 5:
-                local_texts.append(tb["text"])
-                if len(local_texts) >= max_local_blocks:
-                    break
+            if len(local_list) >= 3:
+                break
+            local_list.append(tb2["text"])
 
-        image_items.append({
-            "file": img_name,
+        # 4) kind 판정
+        kind = "figure"
+        cap_low = caption.lower()
+        if caption.startswith("표") or cap_low.startswith("table"):
+            kind = "table"
+
+        images.append({
+            "file": fname,
             "page_number": page_abs_index + 1,
-            "bbox": bbox,
-            "local_text": local_texts
+            "bbox": list(diag_rect),
+            "caption": caption,
+            "local_text": local_list,
+            "kind": kind
         })
+
+    return images
+
+
+# ---------------------------------------------------------
+# 페이지 분석
+# ---------------------------------------------------------
+def extract_page_blocks(page, chapter_idx, page_abs_index, out_dir, domain="default"):
+    text_blocks, page_texts = _extract_text_blocks(page)
+    images = _process_images(page, chapter_idx, page_abs_index, out_dir, text_blocks)
 
     return {
         "page_texts": page_texts,
-        "images": image_items,
+        "images": images,
         "meta": {}
     }
 
 
 # ---------------------------------------------------------
-# (C) 수학 전용 페이지 추출 엔진 (math)
-#   - 기본 엔진 + 수식 후보 span 수집
-# ---------------------------------------------------------
-def _extract_page_blocks_math(page, chapter_idx, page_abs_index, out_dir,
-                              max_local_blocks=3):
-    page_dict = page.get_text("dict")
-    blocks = page_dict["blocks"]
-
-    text_blocks = []
-    formula_spans = []
-    image_blocks = []
-
-    img_counter = 0
-    page_texts = []
-
-    math_fonts = ("CambriaMath", "STIX", "TimesNewRomanPS-Italic",
-                  "TimesNewRomanPS-ItalicMT")
-
-    for idx, b in enumerate(blocks):
-        btype = b.get("type", 0)
-        bbox = b.get("bbox", [0, 0, 0, 0])
-
-        if btype == 0:
-            text = ""
-            for line in b.get("lines", []):
-                for span in line.get("spans", []):
-                    span_text = span.get("text", "")
-                    text += span_text
-                    font = span.get("font", "")
-                    if font and any(f in font for f in math_fonts):
-                        if span_text.strip():
-                            formula_spans.append({
-                                "text": span_text.strip(),
-                                "bbox": span.get("bbox", bbox)
-                            })
-                text += "\n"
-            text = text.strip()
-            if text:
-                text_blocks.append({
-                    "index": idx,
-                    "text": text,
-                    "bbox": bbox
-                })
-                page_texts.append(text)
-
-        elif btype == 1:
-            img_counter += 1
-            image_blocks.append({
-                "index": idx,
-                "bbox": bbox,
-                "img_idx": img_counter
-            })
-
-    image_items = []
-    for ib in image_blocks:
-        bbox = ib["bbox"]
-        rect = fitz.Rect(bbox)
-        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=rect)
-
-        img_name = f"chapter{chapter_idx:02d}_p{page_abs_index+1:04d}_img{ib['img_idx']:02d}.png"
-        out_path = os.path.join(out_dir, img_name)
-        pix.save(out_path)
-
-        local_texts = []
-        for tb in text_blocks:
-            if tb["index"] <= ib["index"]:
-                continue
-            if tb["bbox"][1] >= bbox[3] - 5:
-                local_texts.append(tb["text"])
-                if len(local_texts) >= max_local_blocks:
-                    break
-
-        image_items.append({
-            "file": img_name,
-            "page_number": page_abs_index + 1,
-            "bbox": bbox,
-            "local_text": local_texts
-        })
-
-    return {
-        "page_texts": page_texts,
-        "images": image_items,
-        "meta": {
-            "formulas": formula_spans
-        }
-    }
-
-
-# ---------------------------------------------------------
-# (D) IT 전용 페이지 추출 엔진 (it)
-#   - 기본 엔진 + 코드 블록 수집
-# ---------------------------------------------------------
-def _extract_page_blocks_it(page, chapter_idx, page_abs_index, out_dir,
-                            max_local_blocks=3):
-    page_dict = page.get_text("dict")
-    blocks = page_dict["blocks"]
-
-    text_blocks = []
-    code_blocks = []
-    image_blocks = []
-
-    img_counter = 0
-    page_texts = []
-
-    mono_keywords = ("Consolas", "Courier", "NotoMono", "JetBrainsMono")
-
-    for idx, b in enumerate(blocks):
-        btype = b.get("type", 0)
-        bbox = b.get("bbox", [0, 0, 0, 0])
-
-        if btype == 0:
-            normal_lines = []
-            code_lines = []
-
-            for line in b.get("lines", []):
-                line_text = ""
-                line_mono = False
-                for span in line.get("spans", []):
-                    span_text = span.get("text", "")
-                    font = span.get("font", "")
-                    if any(m in font for m in mono_keywords):
-                        line_mono = True
-                    line_text += span_text
-                line_text_stripped = line_text.rstrip("\n")
-                if line_mono or line_text_stripped.strip().startswith(("for ", "if ", "while ", "def ", "class ")):
-                    code_lines.append(line_text_stripped)
-                else:
-                    normal_lines.append(line_text_stripped)
-
-            if normal_lines:
-                text = "\n".join([ln for ln in normal_lines if ln.strip()])
-                if text.strip():
-                    text_blocks.append({
-                        "index": idx,
-                        "text": text.strip(),
-                        "bbox": bbox
-                    })
-                    page_texts.append(text.strip())
-
-            if code_lines:
-                code_text = "\n".join([ln for ln in code_lines if ln.strip()])
-                code_blocks.append({
-                    "index": idx,
-                    "code": code_text,
-                    "bbox": bbox
-                })
-
-        elif btype == 1:
-            img_counter += 1
-            image_blocks.append({
-                "index": idx,
-                "bbox": bbox,
-                "img_idx": img_counter
-            })
-
-    image_items = []
-    for ib in image_blocks:
-        bbox = ib["bbox"]
-        rect = fitz.Rect(bbox)
-        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=rect)
-
-        img_name = f"chapter{chapter_idx:02d}_p{page_abs_index+1:04d}_img{ib['img_idx']:02d}.png"
-        out_path = os.path.join(out_dir, img_name)
-        pix.save(out_path)
-
-        local_texts = []
-        for tb in text_blocks:
-            if tb["index"] <= ib["index"]:
-                continue
-            if tb["bbox"][1] >= bbox[3] - 5:
-                local_texts.append(tb["text"])
-                if len(local_texts) >= max_local_blocks:
-                    break
-
-        image_items.append({
-            "file": img_name,
-            "page_number": page_abs_index + 1,
-            "bbox": bbox,
-            "local_text": local_texts
-        })
-
-    return {
-        "page_texts": page_texts,
-        "images": image_items,
-        "meta": {
-            "code_blocks": code_blocks
-        }
-    }
-
-
-# ---------------------------------------------------------
-# (E) 경영·경제 전용 페이지 추출 엔진 (biz)
-#   - 기본 엔진 + 표/숫자 많은 블록 힌트 저장
-# ---------------------------------------------------------
-def _extract_page_blocks_biz(page, chapter_idx, page_abs_index, out_dir,
-                             max_local_blocks=3):
-    page_dict = page.get_text("dict")
-    blocks = page_dict["blocks"]
-
-    text_blocks = []
-    table_like_blocks = []
-    image_blocks = []
-
-    img_counter = 0
-    page_texts = []
-
-    for idx, b in enumerate(blocks):
-        btype = b.get("type", 0)
-        bbox = b.get("bbox", [0, 0, 0, 0])
-
-        if btype == 0:
-            text = ""
-            for line in b.get("lines", []):
-                for span in line.get("spans", []):
-                    text += span.get("text", "")
-                text += "\n"
-            text = text.strip()
-            if text:
-                # 숫자와 세로줄(열 구분) 존재 여부로 table 후보 판단(간단 추측)
-                digit_count = sum(ch.isdigit() for ch in text)
-                bar_count = text.count("|")
-                if digit_count >= 6 or bar_count >= 2:
-                    table_like_blocks.append({
-                        "index": idx,
-                        "text": text,
-                        "bbox": bbox
-                    })
-                else:
-                    text_blocks.append({
-                        "index": idx,
-                        "text": text,
-                        "bbox": bbox
-                    })
-                    page_texts.append(text)
-
-        elif btype == 1:
-            img_counter += 1
-            image_blocks.append({
-                "index": idx,
-                "bbox": bbox,
-                "img_idx": img_counter
-            })
-
-    image_items = []
-    for ib in image_blocks:
-        bbox = ib["bbox"]
-        rect = fitz.Rect(bbox)
-        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=rect)
-
-        img_name = f"chapter{chapter_idx:02d}_p{page_abs_index+1:04d}_img{ib['img_idx']:02d}.png"
-        out_path = os.path.join(out_dir, img_name)
-        pix.save(out_path)
-
-        local_texts = []
-        for tb in text_blocks:
-            if tb["index"] <= ib["index"]:
-                continue
-            if tb["bbox"][1] >= bbox[3] - 5:
-                local_texts.append(tb["text"])
-                if len(local_texts) >= max_local_blocks:
-                    break
-
-        image_items.append({
-            "file": img_name,
-            "page_number": page_abs_index + 1,
-            "bbox": bbox,
-            "local_text": local_texts
-        })
-
-    return {
-        "page_texts": page_texts,
-        "images": image_items,
-        "meta": {
-            "table_like_blocks": table_like_blocks
-        }
-    }
-
-
-# ---------------------------------------------------------
-# (F) 공통 래퍼 – domain에 따라 적절한 엔진 호출
-#   domain: "default" / "math" / "it" / "biz"
-# ---------------------------------------------------------
-def extract_page_blocks(page, chapter_idx, page_abs_index, out_dir,
-                        domain="default", max_local_blocks=3):
-    if domain == "math":
-        return _extract_page_blocks_math(
-            page, chapter_idx, page_abs_index, out_dir, max_local_blocks
-        )
-    elif domain == "it":
-        return _extract_page_blocks_it(
-            page, chapter_idx, page_abs_index, out_dir, max_local_blocks
-        )
-    elif domain == "biz":
-        return _extract_page_blocks_biz(
-            page, chapter_idx, page_abs_index, out_dir, max_local_blocks
-        )
-    else:
-        return _extract_page_blocks_default(
-            page, chapter_idx, page_abs_index, out_dir, max_local_blocks
-        )
-
-
-# ---------------------------------------------------------
-# (G) 한 챕터 전체 추출 – domain별 메타 포함
+# chapter.json 생성
 # ---------------------------------------------------------
 def extract_one_chapter(doc, chapter_info, out_root, domain="default"):
-    chap_idx = chapter_info["index"]
-    title = chapter_info["title"]
+    idx = chapter_info["index"]
     start = chapter_info["start"]
     end = chapter_info["end"]
+    title = chapter_info["title"]
 
-    save_dir = os.path.join(out_root, f"chapter_{chap_idx:02d}")
+    save_dir = os.path.join(out_root, f"chapter_{idx:02d}")
     os.makedirs(save_dir, exist_ok=True)
 
     chapter_data = {
-        "chapter_index": chap_idx,
+        "chapter_index": idx,
         "title": title,
         "start_page": start + 1,
-        "end_page": end,
+        "end_page": end + 1,
         "domain": domain,
         "pages": [],
         "images": [],
@@ -450,28 +244,28 @@ def extract_one_chapter(doc, chapter_info, out_root, domain="default"):
     }
 
     all_images = []
-    all_page_meta = []
+    all_meta = []
 
-    for p in range(start, end):
+    for p in range(start, end + 1):
         page = doc.load_page(p)
-        result = extract_page_blocks(
-            page, chap_idx, p, save_dir, domain=domain
-        )
+        result = extract_page_blocks(page, idx, p, save_dir, domain)
+
         chapter_data["pages"].append({
             "page_number": p + 1,
             "text_blocks": result["page_texts"]
         })
+
         all_images.extend(result["images"])
-        all_page_meta.append({
+        all_meta.append({
             "page_number": p + 1,
             "meta": result.get("meta", {})
         })
 
     chapter_data["images"] = all_images
-    chapter_data["meta"]["pages"] = all_page_meta
+    chapter_data["meta"]["pages"] = all_meta
 
-    out_file = os.path.join(save_dir, "chapter.json")
-    with open(out_file, "w", encoding="utf-8") as f:
+    out_path = os.path.join(save_dir, "chapter.json")
+    with open(out_path, "w", encoding="utf-8") as f:
         json.dump(chapter_data, f, ensure_ascii=False, indent=2)
 
-    return out_file
+    return out_path

@@ -14,10 +14,13 @@ import summary_pipeline
 class FullGUI(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("PDF → Chapter Extract → Easy Summary")
-        self.geometry("1150x900")
+        self.title("PDF → User-defined Chapter Extract → Summary")
+        self.geometry("1300x1000")
         self.stop_flag = False
 
+        # -------------------------------
+        # TOP: 파일 선택
+        # -------------------------------
         top = ttk.Frame(self, padding=10)
         top.pack(fill=tk.X)
 
@@ -25,98 +28,128 @@ class FullGUI(tk.Tk):
         self.out_var = tk.StringVar()
 
         ttk.Label(top, text="PDF 파일:").grid(row=0, column=0)
-        ttk.Entry(top, textvariable=self.pdf_var, width=70).grid(row=0, column=1)
+        ttk.Entry(top, textvariable=self.pdf_var, width=80).grid(row=0, column=1)
         ttk.Button(top, text="찾기", command=self.select_pdf).grid(row=0, column=2)
 
         ttk.Label(top, text="출력 폴더:").grid(row=1, column=0)
-        ttk.Entry(top, textvariable=self.out_var, width=70).grid(row=1, column=1)
+        ttk.Entry(top, textvariable=self.out_var, width=80).grid(row=1, column=1)
         ttk.Button(top, text="찾기", command=self.select_output).grid(row=1, column=2)
 
-        ttk.Button(top, text="챕터 분석", command=self.load_chapters)\
-            .grid(row=2, column=1, pady=8)
+        ttk.Button(top, text="목차 불러오기", command=self.load_toc).grid(row=2, column=1, pady=8)
 
-        # 요약 형태 선택
-        opt_mode = ttk.Frame(self, padding=10)
-        opt_mode.pack(fill=tk.X)
+        # -------------------------------
+        # 요약/추출 옵션
+        # -------------------------------
+        opt = ttk.Frame(self, padding=10)
+        opt.pack(fill=tk.X)
 
-        ttk.Label(opt_mode, text="요약 형태:").pack(side=tk.LEFT)
+        ttk.Label(opt, text="요약 형태:").grid(row=0, column=0)
         self.summary_mode = tk.StringVar(value="html")
-        ttk.Combobox(
-            opt_mode,
-            textvariable=self.summary_mode,
-            values=["html", "slide", "markdown", "json", "simple"],
-            width=15
-        ).pack(side=tk.LEFT)
+        ttk.Combobox(opt, textvariable=self.summary_mode,
+                     values=["html", "slide", "markdown", "json", "simple"],
+                     width=12).grid(row=0, column=1)
 
-        # 디자인 스타일 선택
-        opt_style = ttk.Frame(self, padding=10)
-        opt_style.pack(fill=tk.X)
-
-        ttk.Label(opt_style, text="디자인 스타일:").pack(side=tk.LEFT)
+        ttk.Label(opt, text="스타일:").grid(row=0, column=2)
         self.design_style = tk.StringVar(value="basic")
-        ttk.Combobox(
-            opt_style,
-            textvariable=self.design_style,
-            values=["basic", "slide", "blog", "textbook", "custom"],
-            width=15
-        ).pack(side=tk.LEFT)
+        ttk.Combobox(opt, textvariable=self.design_style,
+                     values=["basic", "slide", "blog", "textbook", "custom"],
+                     width=12).grid(row=0, column=3)
 
-        # 그림 포함 여부 선택
-        opt_img = ttk.Frame(self, padding=10)
-        opt_img.pack(fill=tk.X)
-
-        ttk.Label(opt_img, text="그림 포함 여부:").pack(side=tk.LEFT)
+        ttk.Label(opt, text="그림:").grid(row=0, column=4)
         self.use_images = tk.StringVar(value="include")
-        ttk.Combobox(
-            opt_img,
-            textvariable=self.use_images,
-            values=["include", "no_images"],
-            width=15
-        ).pack(side=tk.LEFT)
+        ttk.Combobox(opt, textvariable=self.use_images,
+                     values=["include", "no_images"],
+                     width=12).grid(row=0, column=5)
 
-        # 도서 분야 선택 (default/math/it/biz)
-        opt_domain = ttk.Frame(self, padding=10)
-        opt_domain.pack(fill=tk.X)
-
-        ttk.Label(opt_domain, text="도서 분야:").pack(side=tk.LEFT)
-        # 내부 값은 영어 코드, 표시 텍스트는 한글
+        ttk.Label(opt, text="도메인:").grid(row=0, column=6)
         self.domain_var = tk.StringVar(value="default")
+        ttk.Combobox(opt, textvariable=self.domain_var,
+                     values=["default", "math", "it", "biz"],
+                     width=12).grid(row=0, column=7)
 
-        self.domain_combo = ttk.Combobox(
-            opt_domain,
-            textvariable=self.domain_var,
-            values=["default", "math", "it", "biz"],
-            width=15
-        )
-        self.domain_combo.pack(side=tk.LEFT)
+        ttk.Label(opt, text="핵심 도식만:").grid(row=0, column=8)
+        self.diagram_only = tk.StringVar(value="off")
+        ttk.Combobox(opt, textvariable=self.diagram_only,
+                     values=["off", "on"],
+                     width=12).grid(row=0, column=9)
 
-        ttk.Label(opt_domain, text=" (default: 일반 / math: 수학 / it: IT / biz: 경영·경제)").pack(side=tk.LEFT)
+        # -------------------------------
+        # 사용자 요약 지시문 입력
+        # -------------------------------
+        prompt_frame = ttk.LabelFrame(self, text="사용자 요약 지시문 (선택)", padding=10)
+        prompt_frame.pack(fill=tk.X)
 
-        # 챕터 선택 영역
-        self.chapter_frame = ttk.LabelFrame(self, text="챕터 선택", padding=10)
-        self.chapter_frame.pack(fill=tk.BOTH, expand=True, padx=10)
+        self.user_prompt = tk.Text(prompt_frame, height=4)
+        self.user_prompt.pack(fill=tk.X)
 
-        self.chapter_list = []
-        self.chapter_vars = {}
+        # -------------------------------
+        # 그룹 모드
+        # -------------------------------
+        group_opt = ttk.Frame(self, padding=10)
+        group_opt.pack(fill=tk.X)
 
-        # 실행 버튼들
-        ttk.Button(self, text="선택 챕터 추출", command=self.start_extract)\
-            .pack(pady=4)
-        ttk.Button(self, text="선택 챕터 요약 생성", command=self.start_summary)\
-            .pack(pady=4)
-        ttk.Button(self, text="요약 중단", command=self.stop_summary)\
-            .pack(pady=4)
+        self.group_mode = tk.BooleanVar(value=False)
+        ttk.Checkbutton(group_opt, text="사용자 지정 그룹 모드", variable=self.group_mode).pack(side=tk.LEFT)
 
-        # 진행바 + 로그
-        self.progress = ttk.Progressbar(self, length=820)
+        ttk.Button(group_opt, text="▶ 선택 항목으로 그룹 생성",
+                   command=self.create_group).pack(side=tk.LEFT, padx=10)
+        ttk.Button(group_opt, text="선택 그룹 삭제",
+                   command=self.delete_group).pack(side=tk.LEFT, padx=5)
+
+        # -------------------------------
+        # TOC 리스트 (좌), 그룹 리스트(우)
+        # -------------------------------
+        list_frame = ttk.Frame(self, padding=10)
+        list_frame.pack(fill=tk.BOTH, expand=True)
+
+        # ----- 원본 TOC -----
+        toc_frame = ttk.LabelFrame(list_frame, text="PDF 원본 목차(TOC)", padding=5)
+        toc_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        self.toc_canvas = tk.Canvas(toc_frame)
+        self.toc_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        toc_scroll = ttk.Scrollbar(toc_frame, orient="vertical", command=self.toc_canvas.yview)
+        toc_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.toc_canvas.configure(yscrollcommand=toc_scroll.set)
+
+        self.toc_inner = ttk.Frame(self.toc_canvas)
+        self.toc_canvas.create_window((0, 0), window=self.toc_inner, anchor="nw")
+
+        self.toc_inner.bind("<Configure>", lambda e:
+                            self.toc_canvas.configure(scrollregion=self.toc_canvas.bbox("all")))
+
+        self.toc_vars = {}
+        self.toc_items = []  # [{index, title, start, end, level}, ...]
+
+        # ----- 사용자 그룹 -----
+        group_frame = ttk.LabelFrame(list_frame, text="사용자 그룹", padding=5)
+        group_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+
+        self.group_listbox = tk.Listbox(group_frame, height=30)
+        self.group_listbox.pack(fill=tk.BOTH, expand=True)
+
+        self.user_groups = []  # [{"group_index":1, "title":"...", "items":[3,4,5], "start":.., "end":..}]
+
+        # -------------------------------
+        # 작업 실행 버튼
+        # -------------------------------
+        ttk.Button(self, text="선택 챕터 추출", command=self.start_extract).pack(pady=4)
+        ttk.Button(self, text="선택 챕터 요약 생성", command=self.start_summary).pack(pady=4)
+        ttk.Button(self, text="요약 중단", command=self.stop_summary).pack(pady=4)
+
+        # -------------------------------
+        # 진행 상태
+        # -------------------------------
+        self.progress = ttk.Progressbar(self, length=1100)
         self.progress.pack(pady=6)
 
         self.log = tk.Text(self, height=18)
         self.log.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-    # -----------------------------------------
-    # 파일/폴더 선택
-    # -----------------------------------------
+    # -----------------------------------------------------
+    # PDF / 폴더
+    # -----------------------------------------------------
     def select_pdf(self):
         p = filedialog.askopenfilename(filetypes=[("PDF files", "*.pdf")])
         if p:
@@ -127,109 +160,217 @@ class FullGUI(tk.Tk):
         if p:
             self.out_var.set(p)
 
-    # -----------------------------------------
-    # 챕터 분석 (TOC 기반)
-    # -----------------------------------------
-    def load_chapters(self):
+    # -----------------------------------------------------
+    # PDF TOC 불러오기
+    # -----------------------------------------------------
+    def load_toc(self):
         pdf = self.pdf_var.get()
         if not pdf:
             return messagebox.showerror("오류", "PDF 파일을 선택하세요.")
 
         doc = fitz.open(pdf)
-        chapters = extract_chapter.find_chapter_starts(doc)
-        doc.close()
+        try:
+            self.toc_items = extract_chapter.get_toc_items(doc)
+        finally:
+            doc.close()
 
-        self.chapter_list = chapters
-        self.chapter_vars = {}
-
-        for w in self.chapter_frame.winfo_children():
+        # 기존 위젯 초기화
+        for w in self.toc_inner.winfo_children():
             w.destroy()
+        self.toc_vars = {}
 
-        for ch in chapters:
+        # 목록 다시 그리기
+        for item in self.toc_items:
+            idx = item["index"]
+            title = item["title"]
+            start = item["start"]
+            end = item["end"]
+            level = item["level"]
+
+            indent = "    " * (level - 1)
+            text = f"{indent}[{idx:02d}] {title} (p {start+1}~{end+1})"
+
             var = tk.BooleanVar()
-            self.chapter_vars[ch["index"]] = var
-            txt = f"Chapter {ch['index']:02d}: {ch['title']} / (p {ch['start']+1}~{ch['end']})"
-            ttk.Checkbutton(self.chapter_frame, text=txt, variable=var)\
-                .pack(anchor="w")
+            chk = ttk.Checkbutton(self.toc_inner, text=text, variable=var)
+            chk.pack(anchor="w")
+            self.toc_vars[idx] = var
 
-        self.log_write(f"[INFO] 챕터 {len(chapters)}개 분석 완료")
+        self.log_write(f"[INFO] 목차 항목 {len(self.toc_items)}개 불러옴")
 
-    # -----------------------------------------
-    # 챕터 추출
-    # -----------------------------------------
+    # -----------------------------------------------------
+    # 그룹 생성
+    # -----------------------------------------------------
+    def create_group(self):
+        if not self.group_mode.get():
+            return messagebox.showwarning("주의", "먼저 '사용자 지정 그룹 모드'를 선택하세요.")
+
+        selected = [i for i, item in enumerate(self.toc_items, start=1)
+                    if self.toc_vars[i].get()]
+
+        if not selected:
+            return messagebox.showwarning("주의", "그룹으로 묶을 항목을 선택하세요.")
+
+        # 연속성 검사
+        for i in range(len(selected) - 1):
+            if selected[i + 1] != selected[i] + 1:
+                return messagebox.showerror("오류", "연속된 항목만 그룹으로 묶을 수 있습니다.")
+
+        # 그룹 정보 만들기
+        items = [self.toc_items[i - 1] for i in selected]
+        title = items[0]["title"] or f"그룹{len(self.user_groups)+1}"
+
+        start = min(x["start"] for x in items)
+        end = max(x["end"] for x in items)
+
+        group = {
+            "group_index": len(self.user_groups) + 1,
+            "title": title,
+            "items": selected,
+            "start": start,
+            "end": end
+        }
+        self.user_groups.append(group)
+
+        # 그룹 생성 후 사용한 항목은 자동으로 선택 해제
+        for idx in selected:
+            if idx in self.toc_vars:
+                self.toc_vars[idx].set(False)
+
+        self.update_group_list()
+        self.log_write(f"[그룹 생성] {title} (p {start+1}~{end+1})")
+
+    # -----------------------------------------------------
+    # 그룹 삭제
+    # -----------------------------------------------------
+    def delete_group(self):
+        sel = self.group_listbox.curselection()
+        if not sel:
+            return messagebox.showwarning("주의", "삭제할 그룹을 선택하세요.")
+
+        idx = sel[0]
+        group = self.user_groups[idx]
+        del self.user_groups[idx]
+
+        # index 재정렬
+        for i, g in enumerate(self.user_groups, start=1):
+            g["group_index"] = i
+
+        self.update_group_list()
+        self.log_write(f"[그룹 삭제] {group['title']}")
+
+    # -----------------------------------------------------
+    # 그룹 표시
+    # -----------------------------------------------------
+    def update_group_list(self):
+        self.group_listbox.delete(0, tk.END)
+        for g in self.user_groups:
+            txt = f"[그룹 {g['group_index']:02d}] {g['title']} (p {g['start']+1}~{g['end']+1})"
+            self.group_listbox.insert(tk.END, txt)
+
+    # -----------------------------------------------------
+    # 추출 시작
+    # -----------------------------------------------------
     def start_extract(self):
         pdf = self.pdf_var.get()
         out = self.out_var.get()
         if not pdf or not out:
-            return messagebox.showerror("오류", "PDF/출력 폴더를 확인하세요.")
-
-        selected = [ch for ch in self.chapter_list
-                    if self.chapter_vars.get(ch["index"], tk.BooleanVar()).get()]
-        if not selected:
-            return messagebox.showwarning("주의", "추출할 챕터를 선택하세요.")
+            return messagebox.showerror("오류", "PDF 파일과 출력 폴더를 확인하세요.")
 
         domain = self.domain_var.get() or "default"
 
+        # 그룹이 있으면 → 그룹 기준
+        if self.user_groups:
+            chapters = [{
+                "index": i + 1,
+                "title": g["title"],
+                "start": g["start"],
+                "end": g["end"]
+            } for i, g in enumerate(self.user_groups)]
+        else:
+            # TOC 항목 그대로 챕터로 사용
+            chapters = [{
+                "index": i + 1,
+                "title": item["title"],
+                "start": item["start"],
+                "end": item["end"],
+            } for i, item in enumerate(self.toc_items)]
+
         threading.Thread(
-            target=self.extract_worker,
-            args=(pdf, out, selected, domain),
-            daemon=True
+            target=self.extract_worker, args=(pdf, out, chapters, domain), daemon=True
         ).start()
 
+    # -----------------------------------------------------
+    # 추출 worker
+    # -----------------------------------------------------
     def extract_worker(self, pdf, out, chapters, domain):
         doc = fitz.open(pdf)
         for ch in chapters:
-            self.log_write(f"[추출] Chapter {ch['index']} - {ch['title']} (domain={domain})")
+            self.log_write(f"[추출] {ch['index']} - {ch['title']}")
             result = extract_chapter.extract_one_chapter(doc, ch, out, domain=domain)
             self.log_write(f"  → 저장됨: {result}")
         doc.close()
         self.log_write("[완료] 챕터 추출 종료")
 
-    # -----------------------------------------
-    # 요약 중단
-    # -----------------------------------------
+    # -----------------------------------------------------
+    # 요약
+    # -----------------------------------------------------
     def stop_summary(self):
         self.stop_flag = True
         self.log_write("[중단 요청됨]")
 
-    # -----------------------------------------
-    # 요약 생성
-    # -----------------------------------------
     def start_summary(self):
         out = self.out_var.get()
         if not out:
             return messagebox.showerror("오류", "출력 폴더를 먼저 선택하세요.")
 
-        selected = [ch for ch in self.chapter_list
-                    if self.chapter_vars.get(ch["index"], tk.BooleanVar()).get()]
-        if not selected:
-            return messagebox.showwarning("주의", "요약할 챕터를 선택하세요.")
+        mode = self.summary_mode.get()
+        style = self.design_style.get()
+        use_images = self.use_images.get()
+        domain = self.domain_var.get()
+        diagram_only = (self.diagram_only.get() == "on")
+
+        # 그룹 우선
+        if self.user_groups:
+            chapters = [{
+                "index": i + 1,
+                "title": g["title"],
+                "dir": os.path.join(out, f"chapter_{i+1:02d}")
+            } for i, g in enumerate(self.user_groups)]
+        else:
+            chapters = [{
+                "index": i + 1,
+                "title": item["title"],
+                "dir": os.path.join(out, f"chapter_{i+1:02d}")
+            } for i, item in enumerate(self.toc_items)]
 
         self.progress["value"] = 0
         self.stop_flag = False
 
-        mode = self.summary_mode.get()
-        style = self.design_style.get()
-        use_images = self.use_images.get()
-        domain = self.domain_var.get() or "default"
+        # 사용자 추가 요약 지시문 읽기
+        custom_prompt = ""
+        try:
+            custom_prompt = self.user_prompt.get("1.0", tk.END).strip()
+        except Exception:
+            custom_prompt = ""
 
         threading.Thread(
             target=self.summary_worker,
-            args=(out, selected, mode, style, use_images, domain),
+            args=(chapters, mode, style, use_images, domain, diagram_only, custom_prompt),
             daemon=True
         ).start()
 
-    def summary_worker(self, out_dir, chapters, mode, style, use_images, domain):
+    # -----------------------------------------------------
+    # summary worker
+    # -----------------------------------------------------
+    def summary_worker(self, chapters, mode, style, use_images, domain, diagram_only, user_instruction):
         for ch in chapters:
             if self.stop_flag:
                 self.log_write("[중단됨]")
                 break
 
-            chap_dir = os.path.join(out_dir, f"chapter_{ch['index']:02d}")
-            self.log_write(
-                f"[요약] Chapter {ch['index']} - {ch['title']} "
-                f"(mode={mode}, style={style}, images={use_images}, domain={domain})"
-            )
+            chap_dir = ch["dir"]
+
+            self.log_write(f"[요약] {ch['index']} - {ch['title']}")
 
             def update_progress(v):
                 self.progress["value"] = v * 100
@@ -243,8 +384,10 @@ class FullGUI(tk.Tk):
                 style=style,
                 use_images=use_images,
                 domain=domain,
+                diagram_only=diagram_only,
                 progress_callback=update_progress,
-                stop_flag=stop_check
+                stop_flag=stop_check,
+                user_instruction=user_instruction,
             )
 
             out_path = summary_pipeline.save_summary(chap_dir, text, mode)
@@ -252,14 +395,14 @@ class FullGUI(tk.Tk):
 
             try:
                 webbrowser.open(out_path)
-            except Exception:
+            except:
                 pass
 
         self.log_write("[완료] 요약 생성 종료")
 
-    # -----------------------------------------
+    # -----------------------------------------------------
     # 로그 출력
-    # -----------------------------------------
+    # -----------------------------------------------------
     def log_write(self, msg):
         self.log.insert(tk.END, msg + "\n")
         self.log.see(tk.END)
