@@ -7,6 +7,10 @@ import threading
 import os
 import webbrowser
 import fitz
+import sys
+
+# Add the project root directory to sys.path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import scripts.extract_chapter as extract_chapter
 import scripts.easy_explanation_pipeline as explanation_pipeline
