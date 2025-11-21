@@ -1,151 +1,164 @@
 # gui_extract.py
 # -*- coding: utf-8 -*-
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import filedialog, messagebox
+import customtkinter as ctk
 import threading
 import os
 import webbrowser
 import fitz
 
-import extract_chapter
-import summary_pipeline
+import scripts.extract_chapter as extract_chapter
+import scripts.easy_explanation_pipeline as explanation_pipeline
 
+ctk.set_appearance_mode("System")  # Modes: "System" (standard), "Dark", "Light"
+ctk.set_default_color_theme("blue")  # Themes: "blue" (standard), "green", "dark-blue"
 
-class FullGUI(tk.Tk):
+class FullGUI(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("PDF → User-defined Chapter Extract → Summary")
+        self.title("PDF → User-defined Chapter Extract → Easy Explanation")
         self.geometry("1300x1000")
         self.stop_flag = False
+
+        # Configure grid layout (1x2)
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(0, weight=0) # Top
+        self.grid_rowconfigure(1, weight=0) # Options
+        self.grid_rowconfigure(2, weight=0) # Prompt
+        self.grid_rowconfigure(3, weight=0) # Group Opt
+        self.grid_rowconfigure(4, weight=1) # Lists
+        self.grid_rowconfigure(5, weight=0) # Buttons
+        self.grid_rowconfigure(6, weight=0) # Log
 
         # -------------------------------
         # TOP: 파일 선택
         # -------------------------------
-        top = ttk.Frame(self, padding=10)
-        top.pack(fill=tk.X)
-
+        top = ctk.CTkFrame(self)
+        top.grid(row=0, column=0, padx=10, pady=(10, 5), sticky="ew")
+        
         self.pdf_var = tk.StringVar()
         self.out_var = tk.StringVar()
 
-        ttk.Label(top, text="PDF 파일:").grid(row=0, column=0)
-        ttk.Entry(top, textvariable=self.pdf_var, width=80).grid(row=0, column=1)
-        ttk.Button(top, text="찾기", command=self.select_pdf).grid(row=0, column=2)
+        ctk.CTkLabel(top, text="PDF 파일:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
+        ctk.CTkEntry(top, textvariable=self.pdf_var, width=600).grid(row=0, column=1, padx=5, pady=5)
+        ctk.CTkButton(top, text="찾기", command=self.select_pdf, width=80).grid(row=0, column=2, padx=5, pady=5)
 
-        ttk.Label(top, text="출력 폴더:").grid(row=1, column=0)
-        ttk.Entry(top, textvariable=self.out_var, width=80).grid(row=1, column=1)
-        ttk.Button(top, text="찾기", command=self.select_output).grid(row=1, column=2)
+        ctk.CTkLabel(top, text="출력 폴더:").grid(row=1, column=0, padx=5, pady=5, sticky="w")
+        ctk.CTkEntry(top, textvariable=self.out_var, width=600).grid(row=1, column=1, padx=5, pady=5)
+        ctk.CTkButton(top, text="찾기", command=self.select_output, width=80).grid(row=1, column=2, padx=5, pady=5)
 
-        ttk.Button(top, text="목차 불러오기", command=self.load_toc).grid(row=2, column=1, pady=8)
+        ctk.CTkButton(top, text="목차 불러오기", command=self.load_toc).grid(row=2, column=1, pady=5)
 
         # -------------------------------
         # 요약/추출 옵션
         # -------------------------------
-        opt = ttk.Frame(self, padding=10)
-        opt.pack(fill=tk.X)
+        opt = ctk.CTkFrame(self)
+        opt.grid(row=1, column=0, padx=10, pady=5, sticky="ew")
 
-        ttk.Label(opt, text="요약 형태:").grid(row=0, column=0)
-        self.summary_mode = tk.StringVar(value="html")
-        ttk.Combobox(opt, textvariable=self.summary_mode,
-                     values=["html", "slide", "markdown", "json", "simple"],
-                     width=12).grid(row=0, column=1)
+        ctk.CTkLabel(opt, text="요약 형태:").grid(row=0, column=0, padx=5, pady=5)
+        self.summary_mode = ctk.CTkComboBox(opt, values=["html", "slide", "markdown", "json", "simple"], width=100)
+        self.summary_mode.set("html")
+        self.summary_mode.grid(row=0, column=1, padx=5, pady=5)
 
-        ttk.Label(opt, text="스타일:").grid(row=0, column=2)
-        self.design_style = tk.StringVar(value="basic")
-        ttk.Combobox(opt, textvariable=self.design_style,
-                     values=["basic", "slide", "blog", "textbook", "custom"],
-                     width=12).grid(row=0, column=3)
+        ctk.CTkLabel(opt, text="스타일:").grid(row=0, column=2, padx=5, pady=5)
+        self.design_style = ctk.CTkComboBox(opt, values=["basic", "slide", "blog", "textbook", "custom"], width=100)
+        self.design_style.set("basic")
+        self.design_style.grid(row=0, column=3, padx=5, pady=5)
 
-        ttk.Label(opt, text="그림:").grid(row=0, column=4)
-        self.use_images = tk.StringVar(value="include")
-        ttk.Combobox(opt, textvariable=self.use_images,
-                     values=["include", "no_images"],
-                     width=12).grid(row=0, column=5)
+        ctk.CTkLabel(opt, text="그림:").grid(row=0, column=4, padx=5, pady=5)
+        self.use_images = ctk.CTkComboBox(opt, values=["include", "no_images"], width=100)
+        self.use_images.set("include")
+        self.use_images.grid(row=0, column=5, padx=5, pady=5)
 
-        ttk.Label(opt, text="도메인:").grid(row=0, column=6)
-        self.domain_var = tk.StringVar(value="default")
-        ttk.Combobox(opt, textvariable=self.domain_var,
-                     values=["default", "math", "it", "biz"],
-                     width=12).grid(row=0, column=7)
+        ctk.CTkLabel(opt, text="도메인:").grid(row=0, column=6, padx=5, pady=5)
+        self.domain_var = ctk.CTkComboBox(opt, values=["default", "math", "it", "biz"], width=100)
+        self.domain_var.set("default")
+        self.domain_var.grid(row=0, column=7, padx=5, pady=5)
 
-        ttk.Label(opt, text="핵심 도식만:").grid(row=0, column=8)
-        self.diagram_only = tk.StringVar(value="off")
-        ttk.Combobox(opt, textvariable=self.diagram_only,
-                     values=["off", "on"],
-                     width=12).grid(row=0, column=9)
+        ctk.CTkLabel(opt, text="핵심 도식만:").grid(row=0, column=8, padx=5, pady=5)
+        self.diagram_only = ctk.CTkComboBox(opt, values=["off", "on"], width=80)
+        self.diagram_only.set("off")
+        self.diagram_only.grid(row=0, column=9, padx=5, pady=5)
 
         # -------------------------------
         # 사용자 요약 지시문 입력
         # -------------------------------
-        prompt_frame = ttk.LabelFrame(self, text="사용자 요약 지시문 (선택)", padding=10)
-        prompt_frame.pack(fill=tk.X)
-
-        self.user_prompt = tk.Text(prompt_frame, height=4)
-        self.user_prompt.pack(fill=tk.X)
+        prompt_frame = ctk.CTkFrame(self)
+        prompt_frame.grid(row=2, column=0, padx=10, pady=5, sticky="ew")
+        
+        ctk.CTkLabel(prompt_frame, text="사용자 요약 지시문 (선택)").pack(anchor="w", padx=5, pady=2)
+        self.user_prompt = ctk.CTkTextbox(prompt_frame, height=60)
+        self.user_prompt.pack(fill="x", padx=5, pady=5)
 
         # -------------------------------
         # 그룹 모드
         # -------------------------------
-        group_opt = ttk.Frame(self, padding=10)
-        group_opt.pack(fill=tk.X)
+        group_opt = ctk.CTkFrame(self)
+        group_opt.grid(row=3, column=0, padx=10, pady=5, sticky="ew")
 
-        self.group_mode = tk.BooleanVar(value=False)
-        ttk.Checkbutton(group_opt, text="사용자 지정 그룹 모드", variable=self.group_mode).pack(side=tk.LEFT)
+        self.group_mode = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(group_opt, text="사용자 지정 그룹 모드", variable=self.group_mode).pack(side="left", padx=10, pady=5)
 
-        ttk.Button(group_opt, text="▶ 선택 항목으로 그룹 생성",
-                   command=self.create_group).pack(side=tk.LEFT, padx=10)
-        ttk.Button(group_opt, text="선택 그룹 삭제",
-                   command=self.delete_group).pack(side=tk.LEFT, padx=5)
+        ctk.CTkButton(group_opt, text="▶ 선택 항목으로 그룹 생성", command=self.create_group).pack(side="left", padx=10, pady=5)
+        ctk.CTkButton(group_opt, text="선택 그룹 삭제", command=self.delete_group, fg_color="transparent", border_width=1).pack(side="left", padx=5, pady=5)
 
         # -------------------------------
         # TOC 리스트 (좌), 그룹 리스트(우)
         # -------------------------------
-        list_frame = ttk.Frame(self, padding=10)
-        list_frame.pack(fill=tk.BOTH, expand=True)
+        list_frame = ctk.CTkFrame(self)
+        list_frame.grid(row=4, column=0, padx=10, pady=5, sticky="nsew")
+        list_frame.grid_columnconfigure(0, weight=1)
+        list_frame.grid_columnconfigure(1, weight=1)
+        list_frame.grid_rowconfigure(0, weight=1)
 
         # ----- 원본 TOC -----
-        toc_frame = ttk.LabelFrame(list_frame, text="PDF 원본 목차(TOC)", padding=5)
-        toc_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        toc_frame = ctk.CTkFrame(list_frame)
+        toc_frame.grid(row=0, column=0, padx=5, pady=5, sticky="nsew")
+        
+        ctk.CTkLabel(toc_frame, text="PDF 원본 목차(TOC)").pack(pady=2)
 
-        self.toc_canvas = tk.Canvas(toc_frame)
-        self.toc_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-        toc_scroll = ttk.Scrollbar(toc_frame, orient="vertical", command=self.toc_canvas.yview)
-        toc_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-        self.toc_canvas.configure(yscrollcommand=toc_scroll.set)
-
-        self.toc_inner = ttk.Frame(self.toc_canvas)
-        self.toc_canvas.create_window((0, 0), window=self.toc_inner, anchor="nw")
-
-        self.toc_inner.bind("<Configure>", lambda e:
-                            self.toc_canvas.configure(scrollregion=self.toc_canvas.bbox("all")))
+        self.toc_scroll = ctk.CTkScrollableFrame(toc_frame, label_text="")
+        self.toc_scroll.pack(fill="both", expand=True, padx=5, pady=5)
 
         self.toc_vars = {}
         self.toc_items = []  # [{index, title, start, end, level}, ...]
 
         # ----- 사용자 그룹 -----
-        group_frame = ttk.LabelFrame(list_frame, text="사용자 그룹", padding=5)
-        group_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+        group_frame = ctk.CTkFrame(list_frame)
+        group_frame.grid(row=0, column=1, padx=5, pady=5, sticky="nsew")
+        
+        ctk.CTkLabel(group_frame, text="사용자 그룹").pack(pady=2)
 
-        self.group_listbox = tk.Listbox(group_frame, height=30)
-        self.group_listbox.pack(fill=tk.BOTH, expand=True)
+        # Listbox is not directly available in customtkinter, using standard Listbox with some styling or ScrollableFrame
+        # Using ScrollableFrame for better integration
+        self.group_scroll = ctk.CTkScrollableFrame(group_frame)
+        self.group_scroll.pack(fill="both", expand=True, padx=5, pady=5)
+        
+        self.group_widgets = [] # To keep track of group widgets for selection
+        self.selected_group_index = None
 
         self.user_groups = []  # [{"group_index":1, "title":"...", "items":[3,4,5], "start":.., "end":..}]
 
         # -------------------------------
         # 작업 실행 버튼
         # -------------------------------
-        ttk.Button(self, text="선택 챕터 추출", command=self.start_extract).pack(pady=4)
-        ttk.Button(self, text="선택 챕터 요약 생성", command=self.start_summary).pack(pady=4)
-        ttk.Button(self, text="요약 중단", command=self.stop_summary).pack(pady=4)
+        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        btn_frame.grid(row=5, column=0, padx=10, pady=5)
+        
+        ctk.CTkButton(btn_frame, text="선택 챕터 추출", command=self.start_extract, width=200).pack(side="left", padx=5)
+        ctk.CTkButton(btn_frame, text="선택 챕터 쉬운 해설서 생성", command=self.start_summary, width=200).pack(side="left", padx=5)
+        ctk.CTkButton(btn_frame, text="생성 중단", command=self.stop_summary, fg_color="darkred", width=100).pack(side="left", padx=5)
 
         # -------------------------------
         # 진행 상태
         # -------------------------------
-        self.progress = ttk.Progressbar(self, length=1100)
-        self.progress.pack(pady=6)
+        self.progress = ctk.CTkProgressBar(self)
+        self.progress.grid(row=6, column=0, padx=20, pady=(5,0), sticky="ew")
+        self.progress.set(0)
 
-        self.log = tk.Text(self, height=18)
-        self.log.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        self.log = ctk.CTkTextbox(self, height=150)
+        self.log.grid(row=7, column=0, padx=10, pady=10, sticky="ew")
 
     # -----------------------------------------------------
     # PDF / 폴더
@@ -175,7 +188,7 @@ class FullGUI(tk.Tk):
             doc.close()
 
         # 기존 위젯 초기화
-        for w in self.toc_inner.winfo_children():
+        for w in self.toc_scroll.winfo_children():
             w.destroy()
         self.toc_vars = {}
 
@@ -190,9 +203,9 @@ class FullGUI(tk.Tk):
             indent = "    " * (level - 1)
             text = f"{indent}[{idx:02d}] {title} (p {start+1}~{end+1})"
 
-            var = tk.BooleanVar()
-            chk = ttk.Checkbutton(self.toc_inner, text=text, variable=var)
-            chk.pack(anchor="w")
+            var = ctk.BooleanVar()
+            chk = ctk.CTkCheckBox(self.toc_scroll, text=text, variable=var)
+            chk.pack(anchor="w", pady=2)
             self.toc_vars[idx] = var
 
         self.log_write(f"[INFO] 목차 항목 {len(self.toc_items)}개 불러옴")
@@ -243,13 +256,13 @@ class FullGUI(tk.Tk):
     # 그룹 삭제
     # -----------------------------------------------------
     def delete_group(self):
-        sel = self.group_listbox.curselection()
-        if not sel:
+        if self.selected_group_index is None:
             return messagebox.showwarning("주의", "삭제할 그룹을 선택하세요.")
 
-        idx = sel[0]
+        idx = self.selected_group_index
         group = self.user_groups[idx]
         del self.user_groups[idx]
+        self.selected_group_index = None
 
         # index 재정렬
         for i, g in enumerate(self.user_groups, start=1):
@@ -262,10 +275,27 @@ class FullGUI(tk.Tk):
     # 그룹 표시
     # -----------------------------------------------------
     def update_group_list(self):
-        self.group_listbox.delete(0, tk.END)
-        for g in self.user_groups:
+        for w in self.group_scroll.winfo_children():
+            w.destroy()
+        self.group_widgets = []
+        
+        for i, g in enumerate(self.user_groups):
             txt = f"[그룹 {g['group_index']:02d}] {g['title']} (p {g['start']+1}~{g['end']+1})"
-            self.group_listbox.insert(tk.END, txt)
+            # Using Button to simulate listbox selection
+            btn = ctk.CTkButton(self.group_scroll, text=txt, fg_color="transparent", border_width=1, 
+                                text_color=("gray10", "gray90"), anchor="w",
+                                command=lambda idx=i: self.select_group(idx))
+            btn.pack(fill="x", pady=2)
+            self.group_widgets.append(btn)
+
+    def select_group(self, index):
+        self.selected_group_index = index
+        # Visual feedback
+        for i, btn in enumerate(self.group_widgets):
+            if i == index:
+                btn.configure(fg_color=("gray75", "gray25"))
+            else:
+                btn.configure(fg_color="transparent")
 
     # -----------------------------------------------------
     # 추출 시작
@@ -322,9 +352,7 @@ class FullGUI(tk.Tk):
         out = self.out_var.get()
         if not out:
             return messagebox.showerror("오류", "출력 폴더를 먼저 선택하세요.")
-
-        mode = self.summary_mode.get()
-        style = self.design_style.get()
+        
         use_images = self.use_images.get()
         domain = self.domain_var.get()
         diagram_only = (self.diagram_only.get() == "on")
@@ -343,27 +371,28 @@ class FullGUI(tk.Tk):
                 "dir": os.path.join(out, f"chapter_{i+1:02d}")
             } for i, item in enumerate(self.toc_items)]
 
-        self.progress["value"] = 0
+        self.progress.set(0)
         self.stop_flag = False
 
         # 사용자 추가 요약 지시문 읽기
         custom_prompt = ""
         try:
-            custom_prompt = self.user_prompt.get("1.0", tk.END).strip()
+            custom_prompt = self.user_prompt.get("1.0", "end").strip()
         except Exception:
             custom_prompt = ""
 
         threading.Thread(
             target=self.summary_worker,
-            args=(chapters, mode, style, use_images, domain, diagram_only, custom_prompt),
-            daemon=True
+            args=(chapters, use_images, domain, diagram_only, custom_prompt),
+            daemon=True,
         ).start()
 
     # -----------------------------------------------------
     # summary worker
     # -----------------------------------------------------
-    def summary_worker(self, chapters, mode, style, use_images, domain, diagram_only, user_instruction):
-        for ch in chapters:
+    def summary_worker(self, chapters, use_images, domain, diagram_only, user_instruction):
+        total = len(chapters)
+        for i, ch in enumerate(chapters):
             if self.stop_flag:
                 self.log_write("[중단됨]")
                 break
@@ -373,39 +402,44 @@ class FullGUI(tk.Tk):
             self.log_write(f"[요약] {ch['index']} - {ch['title']}")
 
             def update_progress(v):
-                self.progress["value"] = v * 100
+                # v is 0.0 to 1.0 for single chapter
+                # map to global progress
+                # current chapter base: i / total
+                # current chapter progress: v / total
+                global_p = (i + v) / total
+                self.progress.set(global_p)
 
             def stop_check():
                 return self.stop_flag
 
-            text = summary_pipeline.summarize_chapter(
-                chap_dir,
-                mode=mode,
-                style=style,
-                use_images=use_images,
-                domain=domain,
-                diagram_only=diagram_only,
-                progress_callback=update_progress,
-                stop_flag=stop_check,
-                user_instruction=user_instruction,
-            )
-
-            out_path = summary_pipeline.save_summary(chap_dir, text, mode)
-            self.log_write(f"  → 요약 저장: {out_path}")
-
             try:
-                webbrowser.open(out_path)
-            except:
-                pass
+                html = explanation_pipeline.easy_explain_chapter(
+                    chap_dir,
+                    domain=domain,
+                    use_images=use_images,
+                    diagram_only=diagram_only,
+                    progress_callback=update_progress,
+                    stop_flag=stop_check,
+                    user_instruction=user_instruction,
+                )
+                out_path = explanation_pipeline.save_explanation(chap_dir, html)
+                self.log_write(f"  → 쉬운 해설서 저장: {out_path}")
+                try:
+                    webbrowser.open(out_path)
+                except Exception:
+                    pass
+            except Exception as e:
+                self.log_write(f"  → 쉬운 해설서 생성 실패: {e}")
 
+        self.progress.set(1.0)
         self.log_write("[완료] 요약 생성 종료")
 
     # -----------------------------------------------------
     # 로그 출력
     # -----------------------------------------------------
     def log_write(self, msg):
-        self.log.insert(tk.END, msg + "\n")
-        self.log.see(tk.END)
+        self.log.insert("end", msg + "\n")
+        self.log.see("end")
 
 
 if __name__ == "__main__":
